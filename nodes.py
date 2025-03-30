@@ -109,7 +109,7 @@ class ImageSaver:
                 "images":                ("IMAGE",   {                                                             "tooltip": "image(s) to save"}),
                 "filename":              ("STRING",  {"default": '%time_%basemodelname_%seed', "multiline": False, "tooltip": "filename (available variables: %date, %time, %model, %width, %height, %seed, %counter, %sampler_name, %steps, %cfg, %scheduler, %basemodelname, %denoise, %clip_skip)"}),
                 "path":                  ("STRING",  {"default": '', "multiline": False,                           "tooltip": "path to save the images (under Comfy's save directory)"}),
-                "extension":             (['png', 'jpeg', 'jpg', 'webp'], {                                        "tooltip": "file extension/type to save image as"}),
+                "extension":             (['png', 'jpeg', 'jpg', 'webp', 'webp (animated)'], {                     "tooltip": "file extension/type to save image as"}),
             },
             "optional": {
                 "steps":                 ("INT",     {"default": 20, "min": 1, "max": 10000,                       "tooltip": "number of steps"}),
@@ -134,6 +134,7 @@ class ImageSaver:
                 "additional_hashes":     ("STRING",  {"default": "", "multiline": False,                           "tooltip": "hashes separated by commas, optionally with names. 'Name:HASH' (e.g., 'MyLoRA:FF735FF83F98')\nWith download_civitai_data set to true, weights can be added as well. (e.g., 'HASH:Weight', 'Name:HASH:Weight')"}),
                 "download_civitai_data": ("BOOLEAN", {"default": True,                                             "tooltip": "Download and cache data from civitai.com to save correct metadata. Allows LoRA weights to be saved to the metadata."}),
                 "easy_remix":            ("BOOLEAN", {"default": True,                                             "tooltip": "Strip LoRAs and simplify 'embedding:path' from the prompt to make the Remix option on civitai.com more seamless."}),
+                "frame_rate":            ("FLOAT",   {"default": 16.0,                                             "tooltip": "If animated, framerate of the saved image in frames/second"}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -180,6 +181,7 @@ class ImageSaver:
         time_format,
         denoise,
         clip_skip,
+        frame_rate=16.0,
         additional_hashes="",
         save_workflow_as_json=False,
         embed_workflow=True,
@@ -329,31 +331,44 @@ class ImageSaver:
                 print(f'The path `{output_path.strip()}` specified doesn\'t exist! Creating directory.')
                 os.makedirs(output_path, exist_ok=True)
 
-        filenames = self.save_images(images, output_path, filename, a111_params, extension, quality_jpeg_or_webp, lossless_webp, optimize_png, prompt, extra_pnginfo, save_workflow_as_json, embed_workflow)
+        animated = extension == "webp (animated)" and len(images) > 1
+
+        filenames = self.save_images(images, output_path, filename, a111_params, extension, frame_rate, quality_jpeg_or_webp, lossless_webp, optimize_png, prompt, extra_pnginfo, save_workflow_as_json, embed_workflow)
 
         subfolder = os.path.normpath(path)
 
         return {
             "result": (",".join(f"{Path(name.split(':')[-1]).stem + ':' if name else ''}{hash}{':' + str(weight) if weight is not None and download_civitai_data else ''}" for name, (_, weight, hash) in ({ modelname: ( ckpt_path, None, modelhash ) } | loras | embeddings | manual_entries).items()),),
-            "ui": {"images": map(lambda filename: {"filename": filename, "subfolder": subfolder if subfolder != '.' else '', "type": 'output'}, filenames)},
+            "ui": {"images": map(lambda filename: {"filename": filename, "subfolder": subfolder if subfolder != '.' else '', "type": 'output'}, filenames), "animated": (animated,)},
         }
 
-    def save_images(self, images, output_path, filename_prefix, a111_params, extension, quality_jpeg_or_webp, lossless_webp, optimize_png, prompt, extra_pnginfo, save_workflow_as_json, embed_workflow) -> list[str]:
-        paths = list()
-        for image in images:
+    def save_images(self, images, output_path, filename_prefix, a111_params, extension, frame_rate, quality_jpeg_or_webp, lossless_webp, optimize_png, prompt, extra_pnginfo, save_workflow_as_json, embed_workflow) -> list[str]:
+        def img_to_pil(image):
             i = 255. * image.cpu().numpy()
-            img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
+            return Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
 
+        def process_image(img, animated=False):
             current_filename_prefix = self.get_unique_filename(output_path, filename_prefix, extension)
             filename = f"{current_filename_prefix}.{extension}"
             filepath = os.path.join(output_path, filename)
 
-            save_image(img, filepath, extension, quality_jpeg_or_webp, lossless_webp, optimize_png, a111_params, prompt, extra_pnginfo, embed_workflow)
+            save_image(img, filepath, extension, frame_rate, animated, quality_jpeg_or_webp, lossless_webp, optimize_png, a111_params, prompt, extra_pnginfo, embed_workflow)
 
             if save_workflow_as_json:
                 save_json(extra_pnginfo, os.path.join(output_path, current_filename_prefix))
 
             paths.append(filename)
+
+        paths = list()
+        if extension == "webp (animated)":
+            extension = "webp"
+            imgs = [img_to_pil(image) for image in images]
+            process_image(imgs, animated=True)
+        else:
+            for image in images:
+                img = img_to_pil(image)
+                process_image(img)
+
         return paths
 
     def get_unique_filename(self, output_path, filename_prefix, extension):

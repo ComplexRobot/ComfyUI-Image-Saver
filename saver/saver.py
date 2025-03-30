@@ -4,7 +4,7 @@ import json
 import piexif
 import piexif.helper
 
-def save_image(image, filepath, extension, quality_jpeg_or_webp, lossless_webp, optimize_png, a111_params, prompt, extra_pnginfo, embed_workflow):
+def save_image(image, filepath, extension, frame_rate, animated, quality_jpeg_or_webp, lossless_webp, optimize_png, a111_params, prompt, extra_pnginfo, embed_workflow):
     if extension == 'png':
         metadata = PngInfo()
         metadata.add_text("parameters", a111_params)
@@ -18,7 +18,12 @@ def save_image(image, filepath, extension, quality_jpeg_or_webp, lossless_webp, 
 
         image.save(filepath, pnginfo=metadata, optimize=optimize_png)
     else: # webp & jpeg
-        image.save(filepath, optimize=True, quality=quality_jpeg_or_webp, lossless=lossless_webp)
+        if animated and len(image) > 1:
+            image[0].save(filepath, optimize=True, quality=quality_jpeg_or_webp, lossless=lossless_webp, save_all=True, duration=int(1000.0 / frame_rate), append_images=image[1:], method=6)
+        else:
+            if animated:
+                image = image[0]
+            image.save(filepath, optimize=True, quality=quality_jpeg_or_webp, lossless=lossless_webp)
 
         # Native example adding workflow to exif:
         # https://github.com/comfyanonymous/ComfyUI/blob/095610717000bffd477a7e72988d1fb2299afacb/comfy_extras/nodes_images.py#L113
